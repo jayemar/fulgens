@@ -1,107 +1,60 @@
 (ns jayemar.fulgens.core
-  (:require [clojure.data.csv :as csv]
-            [clojure.string :as str]))
+  (:require [clojure.java.io :as io]
+            [clojure.data.csv :as csv]
+            [clojure.string :as str]
+            [msgpack.core :as msg]))
 
-;; Don't print all of huge values
-;; *print-level* may also be of interest
-(set! *print-length* 10)
+;; TODO: Add TESTS
 
-(def dummy 2)
-
-(def proj-home "/home/jayemar/projects/covid19/covid-forecast/week1/global/")
-
-(defn get-csv
-  "Reads CSV file filename and returns a map of the data"
-  [filename]
-  (csv/read-csv (slurp (apply str [proj-home filename]))))
-
-(def train-csv (get-csv "train.csv"))
-
-(def test-csv (get-csv "test.csv"))
-
-(defn str->int
-  "Convert a string to the integer that had been stringified"
-  [val]
-  ;; (int (Float/parseFloat val))
-  (int (read-string val)))
-
-(defn str->float
-  "Convert a string to the float that had been stringified"
-  [val]
-  ;; (int (Float/parseFloat val))
-  (float (read-string val)))
-
-;; Could use clojure.set/rename-keys with this
-(def rename-map
-  {"Id" "id"
-   "ForecastId" "id"
-   "Province/State" "state"
-   "Country/Region" "country"
-   "Date" "date"
-   "ConfirmedCases" "confirmed"
-   "Fatalities" "fatalities"
-   "Lat" "lat"
-   "Long" "lon"})
-
-(def convert-type-map
-  {:id str->int
-   :lat str->float
-   :lon str->float
-   :confirmed str->int
-   :fatalities str->int})
-
-(defn csv-rename-cols
+(defn- csv-rename-cols
   "Rename column headings in a csv-style list using {old new}"
   [csv-list name-map]
   (cons
    (mapv #(if (name-map %) (name-map %) %) (first csv-list))
    (rest csv-list)))
 
+(defn all-maps?
+  "Determines whether all items in seq are hashmaps"
+  [s]
+  (empty? (filter #(not (map? %)) s)))
 
-(defn retype-dict-bad
-  "Change the dtype of a values in a dict based on type-map where type-map
-  is of the form {:id type-fn}"
-  [dict type-map]
-  (mapv #(if (type-map (key %))
-           (hash-map (key %) ((type-map (key %)) (val %)))
-           (hash-map (key %) (val %)))
-        dict))
+(defn all-lists?
+  "Determines whether all items in seq are seqs or vectors"
+  [s]
+  (empty? (filter #(and (not (vector? %)) (not (seq? %))) s)))
 
-(defn retype-dict-multiple
-  "Change the dtype of a values in a dict based on type-map where type-map
-  is of the form {:id type-fn}"
-  [dict type-map]
-  (mapv
-   #(if (dict (key %))
-      (update dict (key %) (val %))
-      dict)
-   type-map))
+;; For multi-level could use clojure.walk/keywordize-keys
+(defn- keywordize-keys
+  "Convert hmap keys into keywords, replacing spaces with underscores"
+  [hmap]
+  (zipmap
+   (map #(if (not (keyword? %))
+           (keyword (str/replace % #" " "_"))%)
+        (keys hmap))
+   (vals hmap)))
 
-;; use with convert-type-map
-(defn retype-dict
-  "Change the dtype of a values in a dict based on type-map where type-map
-  is of the form {:id type-fn}"
-  [dict type-map]
-  (reduce 
-   (fn [r [k v]]
-     (if (type-map k)
-      (update dict k v)
-      dict))
-   {}
-   dict))
+;; TODO: Allow for passing in column name map at time of creation
+(defn DataFrame
+  "Convert a csv-style list into a pandas-like map (DataFrame)"
+  [sq]
+  (if (all-lists? sq)
+    (let [keys (map #(keyword %) (first sq))
+          data (rest sq)]
+      (mapv #(zipmap keys %) data))
+    ;; If the first item is a map, we're assuming it's already DataFrame
+    (mapv keywordize-keys sq)))
 
-(defn update-values [m f & args]
-  (reduce (fn [r [k v]] (assoc r k (apply f v args))) {} m))
-
-(defn df-retype
-  "Convert the type of column in a DataFrame using {:id dtype}"
-  [df type-map]
-  (mapv #(retype-dict % type-map) df))
+;; TODO: Should expand this check.  All maps should have the same keys and dtypes
+(defn df?
+  "Checks whether or not it's a DataFrame"
+  [d]
+  (all-maps? d))
 
 (defn loc
   "Return DataFrame with colums specified in cols"
   [df & cols]
-  (map (apply juxt cols) df))
+  ;; (map (apply juxt cols) df)
+  (mapv #(select-keys % cols) df))
 
 (defn iloc
   "Return item at idx or range until stop"
@@ -110,41 +63,47 @@
   ([df idx]
    (subvec df idx (inc idx))))
 
-;; For multi-level could use clojure.walk/keywordize-keys
-(defn keywordize-keys
-  "Convert hmap keys into keywords, replacing spaces with underscores"
-  [hmap]
-  (zipmap
-   (map #(keyword (str/replace % #" " "_")) (keys hmap))
-   (vals hmap)))
+(defn shape
+  "Return the number of rows and columns"
+  [df]
+  (seq [(count df) (count (first df))]))
 
-(defn DataFrame
-  "Convert a csv-style list into a pandas-like map (DataFrame)"
-  [csv-list]
-  (let [keys (map #(keyword %) (first csv-list))
-        data (rest csv-list)]
-    (mapv #(zipmap keys %) data)))
-
-(def train-df
-  (DataFrame (csv-rename-cols train-csv rename-map)))
-
-(def test-df
-  "Attempt using the thread approach"
-  (-> test-csv
-      (csv-rename-cols rename-map)
-      DataFrame))
-
-(defn df-cols
+(defn columns
   "Show a list of the columns in a DataFrame"
   [df]
-  (keys (first df)))
+  (if (df? df)
+    (keys (first df))))
+(def cols columns)
 
-(defn map-ordered-vals
-  "Order a map be values in descending order"
-  [hmap]
-  ( ))
+;; Could use clojure.set/rename-keys
+(defn rename
+  "Rename columns in DataFrame using hash-map"
+  [df m]
+  (map #(reduce
+         (fn [r [k v]]
+           (if (k m)
+             (assoc r (k m) v)
+             (assoc r k v)))
+         {}
+         %)
+       df))
 
-(def freq-map (keywordize-keys (frequencies (map #(:country %) train-df))))
+(defn- dict-retype
+  "Change the dtype of a values in a dict based on type-map where type-map
+  is of the form {:id type-fn}"
+  [dict type-map]
+  (reduce
+   (fn [m [k v]]
+     (if (type-map k)
+       (assoc m k ((type-map k) v))
+       (assoc m k v)))
+   {}
+   dict))
+
+(defn astype
+  "Convert the type of column in a DataFrame using {:id dtype}"
+  [df type-map]
+  (mapv #(dict-retype % type-map) df))
 
 (defn map-val-sort
   "Sort a hash-map in decreasing order using the values"
@@ -167,6 +126,14 @@
        (map reverse)
        (mapv #(hash-map (first %) (last %)))))
 
-(def freq-map-sorted (map-val-sort freq-map))
+;; TODO: Use better IO handling operation(s)
+(defn read-csv
+  "Reads CSV file filename and returns a map of the data"
+  [filename]
+  (DataFrame (csv/read-csv (slurp filename))))
 
-(def freq-map-rsorted (map-val-rsort freq-map))
+;; TODO: Implement this function, hopefully with proper IO handling
+(defn to-msgpack
+  "Write object to a file in seiralized msgpack format"
+  [df filename]
+  nil)
