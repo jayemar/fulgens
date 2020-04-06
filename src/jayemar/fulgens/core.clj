@@ -1,8 +1,8 @@
 (ns jayemar.fulgens.core
   (:require [clojure.java.io :as io]
             [clojure.data.csv :as csv]
-            [clojure.string :as str]
-            [msgpack.core :as msg]))
+            [clojure.data.json :as json]
+            [clojure.string :as str]))
 
 ;; TODO: Add TESTS
 
@@ -130,10 +130,19 @@
 (defn read-csv
   "Reads CSV file filename and returns a map of the data"
   [filename]
-  (DataFrame (csv/read-csv (slurp filename))))
+  (with-open [f (io/reader filename)]
+    (DataFrame
+     (doall
+      (csv/read-csv f)))))
 
-;; TODO: Implement this function, hopefully with proper IO handling
-(defn to-msgpack
-  "Write object to a file in seiralized msgpack format"
-  [df filename]
-  nil)
+(defn save-to-json
+  "Save a data structure to filename as JSON data"
+  [obj filename]
+  (with-open [f (io/writer filename)]
+    (json/write obj f)))
+
+(defn read-from-json
+  "Read a data structure from filename as JSON data"
+  [filename]
+  (with-open [f (io/reader filename)]
+    (json/read f)))
