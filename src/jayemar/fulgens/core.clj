@@ -2,7 +2,8 @@
   (:require [clojure.java.io :as io]
             [clojure.data.csv :as csv]
             [clojure.data.json :as json]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [clojure.edn :as edn]))
 
 ;; TODO: Add TESTS
 
@@ -44,7 +45,7 @@
     ;; If the first item is a map, we're assuming it's already DataFrame
     (mapv keywordize-keys sq)))
 
-;; TODO: Should expand this check.  All maps should have the same keys and dtypes
+;; TODO: Should expand this check; maybe use spec?
 (defn df?
   "Checks whether or not it's a DataFrame"
   [d]
@@ -53,15 +54,25 @@
 (defn loc
   "Return DataFrame with colums specified in cols"
   [df & cols]
-  ;; (map (apply juxt cols) df)
   (mapv #(select-keys % cols) df))
 
 (defn iloc
-  "Return item at idx or range until stop"
-  ([df idx stop]
-   (subvec df idx stop))
+  "Return item at idx or range from start to stop"
+  ([df start stop]
+   (cond
+     (and (< start 0) (< stop 0)) (let [c (count df)]
+                                    (subvec df (+ c start 1) (+ c stop 1)))
+     (< start 0) (subvec df 0 stop)
+     (< stop 0) (subvec df start)
+     :else (subvec df start stop)))
   ([df idx]
-   (subvec df idx (inc idx))))
+   (first (subvec df idx (inc idx)))))
+
+;; TODO: Finish this function
+(defn- fillna
+  "Fill nil fields with the result of a function"
+  [df x]
+  df)
 
 (defn shape
   "Return the number of rows and columns"
@@ -88,15 +99,33 @@
          %)
        df))
 
+(defn- to-num
+  "Convert a value to a number"
+  [val]
+  (if (string? val) (edn/read-string val) val))
+
+(defn- to-int
+  "Convert a value to an integer"
+  [val]
+  (int (to-num val)))
+
+(defn- to-float
+  "Convert a value to an integer"
+  [val]
+  (float (to-num val)))
+
 (defn- dict-retype
   "Change the dtype of a values in a dict based on type-map where type-map
-  is of the form {:id type-fn}"
+  is of the form {:id type}"
   [dict type-map]
   (reduce
    (fn [m [k v]]
-     (if (type-map k)
-       (assoc m k ((type-map k) v))
-       (assoc m k v)))
+     (let [func (type-map k)]
+       (cond
+         (= func int) (assoc m k (to-int v))
+         (= func float) (assoc m k (to-float v))
+         (= func str) (assoc m k (str v))
+         :else (assoc m k v))))
    {}
    dict))
 
@@ -126,7 +155,6 @@
        (map reverse)
        (mapv #(hash-map (first %) (last %)))))
 
-;; TODO: Use better IO handling operation(s)
 (defn read-csv
   "Reads CSV file filename and returns a map of the data"
   [filename]
